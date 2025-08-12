@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+venv/
+.env
+
+# VSCode
+.vscode/
+
+# Data
+*.csv
+*.xlsx
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
