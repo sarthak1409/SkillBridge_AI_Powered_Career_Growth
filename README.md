@@ -10,7 +10,8 @@ The system is composed of:
 - **Frontend (Streamlit)** – Interactive UI for users to upload resumes, paste job descriptions, and view results
 
 ---
-## Project UI
+
+## 📸 Project UI
 
 ![project image](images/main_image.png)
 
@@ -18,7 +19,7 @@ The system is composed of:
 
 ## 📂 Project Structure
 
-```plaintext
+```
 project-root/
 │
 ├── backend/
@@ -32,10 +33,11 @@ project-root/
 │   │   └── config.toml
 │
 ├── images/
-│   └── resume.png               # Sample image for README
+│   └── resume.png
 │
-├── requirements.txt             # Python dependencies
-└── README.md                    # Project documentation
+├── requirements.txt
+└── README.md
+```
 
 ---
 
@@ -62,13 +64,7 @@ project-root/
 ```bash
 git clone https://github.com/your-username/skillbridge.git
 cd skillbridge
-
-## ⚡ Installation & Running
-
-### 1️⃣ Clone the repository
-```bash
-git clone https://github.com/your-username/skillbridge.git
-cd skillbridge
+```
 
 ### 2️⃣ Create and activate virtual environment
 ```bash
@@ -77,26 +73,30 @@ python -m venv venv
 source venv/bin/activate
 # On Windows
 venv\Scripts\activate
+```
 
 ### 3️⃣ Install dependencies
 ```bash
 pip install -r requirements.txt
+```
 
 ### 4️⃣ Run the Backend (FastAPI)
 ```bash
 cd backend
 python -m uvicorn main:app --reload
-Backend will start at: http://localhost:8000
+```
+Backend will start at: [http://localhost:8000](http://localhost:8000)
 
 ### 5️⃣ Run the Frontend (Streamlit)
 ```bash
 cd frontend
 streamlit run app.py
-Frontend will start at: http://localhost:8501
+```
+Frontend will start at: [http://localhost:8501](http://localhost:8501)
 
 ### 6️⃣ Open in Browser
-Backend API Docs: http://localhost:8000/docs
-Frontend App: http://localhost:8501
+- Backend API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)  
+- Frontend App: [http://localhost:8501](http://localhost:8501)
 
 ---
 
@@ -138,5 +138,4 @@ This project is licensed under the **MIT License** – see the [LICENSE](LICENSE
 4. **See:**
    - ✅ Skills found in resume  
    - ⚠ Missing / weak skills with severity  
-   - 📅 Recommended learning plan
-
+   - 📅 Recommended learning plan  
