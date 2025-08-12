@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -7,15 +7,31 @@ import re
 import pdfplumber
 import docx2txt
 import numpy as np
-from sentence_transformers import SentenceTransformer, util
-import spacy
-from spacy.matcher import PhraseMatcher
 import csv
 from pathlib import Path
 import os
 import uvicorn
-from fastapi import FastAPI
+import logging
 
+# Globals for lazy-loaded models
+embed_model = None
+nlp = None
+
+def get_embed_model():
+    global embed_model
+    if embed_model is None:
+        from sentence_transformers import SentenceTransformer
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        logging.info("Loaded SentenceTransformer model")
+    return embed_model
+
+def get_nlp():
+    global nlp
+    if nlp is None:
+        import spacy
+        nlp = spacy.load("en_core_web_sm")
+        logging.info("Loaded spaCy model")
+    return nlp
 
 app = FastAPI(title="SkillBridge API - Improved Extractor")
 
@@ -26,11 +42,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-embed_model = SentenceTransformer(EMBED_MODEL_NAME)
-
-nlp = spacy.load("en_core_web_sm")
 
 SKILLS_FILE = Path(__file__).parent / "skills" / "unique_skills_dataset.csv"
 
@@ -49,6 +60,7 @@ def load_skills_from_csv(path: Path):
 BASE_SKILLS, SKILL_CATEGORIES = load_skills_from_csv(SKILLS_FILE)
 BASE_SKILLS_LOWER = [s.lower() for s in BASE_SKILLS]
 
+# ... (Keep your SYNONYM_MAP as-is) ...
 SYNONYM_MAP = {
     'oracle db': 'Oracle DB',
     'flink': 'Flink',
@@ -164,13 +176,23 @@ SYNONYM_MAP = {
     'smm': 'Social Media Marketing'
 }
 
+
 def canonicalize(skill: str) -> str:
     s = skill.lower().strip()
     return SYNONYM_MAP.get(s, skill.strip().title())
 
-phrase_matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
-patterns = [nlp.make_doc(s) for s in set(BASE_SKILLS)]
-phrase_matcher.add("SKILLS", patterns)
+# phrase_matcher needs nlp loaded, so create lazily
+phrase_matcher = None
+def get_phrase_matcher():
+    global phrase_matcher
+    if phrase_matcher is None:
+        nlp_local = get_nlp()
+        from spacy.matcher import PhraseMatcher
+        phrase_matcher = PhraseMatcher(nlp_local.vocab, attr="LOWER")
+        patterns = [nlp_local.make_doc(s) for s in set(BASE_SKILLS)]
+        phrase_matcher.add("SKILLS", patterns)
+        logging.info("Initialized PhraseMatcher")
+    return phrase_matcher
 
 def extract_text_from_pdf_bytes(b: bytes) -> str:
     try:
@@ -224,9 +246,11 @@ def extract_skills_from_text(text: str) -> List[str]:
     if not text:
         return []
     text = normalize(text)
-    doc = nlp(text)
+    nlp_local = get_nlp()
+    doc = nlp_local(text)
+    phrase_matcher_local = get_phrase_matcher()
     found = set()
-    matches = phrase_matcher(doc)
+    matches = phrase_matcher_local(doc)
     for _, start, end in matches:
         span = doc[start:end].text.strip()
         found.add(canonicalize(span))
@@ -278,10 +302,12 @@ def infer_proficiency(text: str, skill: str) -> Dict[str, Any]:
     return {"skill": skill, "years": years, "level": level}
 
 def embed_texts(texts: List[str]) -> np.ndarray:
+    embed_model_local = get_embed_model()
     if not texts:
-        return np.zeros((0, embed_model.get_sentence_embedding_dimension()))
-    return embed_model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+        return np.zeros((0, embed_model_local.get_sentence_embedding_dimension()))
+    return embed_model_local.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
 
+# Your Pydantic models as is
 class ParseJobIn(BaseModel):
     text: str
 
@@ -331,6 +357,7 @@ async def analyze_gap(payload: GapIn):
         j_emb = embed_texts([jskill])
         best_score = 0.0
         if len(resume_skills) > 0:
+            from sentence_transformers import util
             sims = util.cos_sim(j_emb, resume_emb).numpy().flatten()
             best_score = float(np.max(sims))
         direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
@@ -367,10 +394,9 @@ async def analyze_gap(payload: GapIn):
 @app.get("/")
 def read_root():
     return {"status": "ok", "service": "skillbridge_improved"}
-    
+
 if __name__ == "__main__":
-
+    logging.basicConfig(level=logging.INFO)
     port = int(os.environ.get("PORT", 8000))
+    logging.info(f"Starting app on port {port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
-
