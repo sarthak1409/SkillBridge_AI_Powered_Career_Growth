@@ -18,24 +18,24 @@ The system is composed of:
 
 ## 📂 Project Structure
 
+```plaintext
 project-root/
 │
 ├── backend/
-│ ├── main.py # FastAPI backend
-│ ├── skills/
-│ │ └── unique_skills_dataset.csv
+│   ├── main.py                  # FastAPI backend
+│   ├── skills/
+│   │   └── unique_skills_dataset.csv
 │
 ├── frontend/
-│ ├── app.py # Streamlit frontend
-│ ├── .streamlit/
-│ │ └── config.toml
+│   ├── app.py                   # Streamlit frontend
+│   ├── .streamlit/
+│   │   └── config.toml
 │
 ├── images/
-│ └── resume.png
+│   └── resume.png               # Sample image for README
 │
-├── requirements.txt
-└── README.md
-
+├── requirements.txt             # Python dependencies
+└── README.md                    # Project documentation
 
 ---
 
@@ -139,3 +139,4 @@ This project is licensed under the **MIT License** – see the [LICENSE](LICENSE
    - ✅ Skills found in resume  
    - ⚠ Missing / weak skills with severity  
    - 📅 Recommended learning plan
+
