@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 from PIL import Image
 import random
+import os  # Added for path handling
 
 st.set_page_config(page_title="SkillBridge", page_icon="🚀", layout="wide")
 API_URL = "http://localhost:8000"
@@ -94,7 +95,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    logo_img = Image.open("../images/resume.png")
+    # Robust path to logo image relative to this script file
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    image_path = os.path.join(script_dir, '..', 'images', 'resume.png')
+    logo_img = Image.open(image_path)
+    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.image(logo_img, width=150)
