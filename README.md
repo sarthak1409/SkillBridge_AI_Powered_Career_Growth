@@ -111,11 +111,6 @@ Frontend will start at: [http://localhost:8501](http://localhost:8501)
 
 ---
 
-## 📜 License
-This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.
-
----
-
 ## ✍️ Author
 **Sarthak Maddi**  
 💡 Developed with ❤️ for career growth automation.
@@ -139,3 +134,4 @@ This project is licensed under the **MIT License** – see the [LICENSE](LICENSE
    - ✅ Skills found in resume  
    - ⚠ Missing / weak skills with severity  
    - 📅 Recommended learning plan  
+
