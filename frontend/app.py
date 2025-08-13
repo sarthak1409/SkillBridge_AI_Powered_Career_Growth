@@ -6,7 +6,7 @@ import random
 import os  # Added for path handling
 
 st.set_page_config(page_title="SkillBridge", page_icon="🚀", layout="wide")
-API_URL = "https://skillbridge-ai-powered-career-growth-1.onrender.com"
+API_URL = "https://skillbridge-ai-powered-career-growth.onrender.com"
 
 st.markdown("""
     <style>
@@ -241,6 +241,7 @@ if analyze_btn and resume_file and job_text_input:
                 st.markdown(f"✅ No tasks for {period.replace('_', ' ').title()}")
 else:
     st.info("📌 Please upload a resume and paste a job description to begin.")
+
 
 
 
