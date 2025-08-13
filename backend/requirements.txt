@@ -12,4 +12,6 @@ numpy
 pandas
 requests
 python-dotenv
-torch==2.8.0+cpu -f https://download.pytorch.org/whl/torch_stable.html
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
