@@ -172,7 +172,7 @@ if analyze_btn and resume_file and job_text_input:
             job_resp = requests.post(f"{API_URL}/parse/job", json={"text": job_text_input})
             job_data = job_resp.json()
             gap_resp = requests.post(f"{API_URL}/analyze/gap", json={
-                "resume_text": resume_data["parsed_text_preview"],
+                "resume_text": resume_data.get("parsed_text_preview", ""),
                 "job_text": job_text_input
             })
             gap_data = gap_resp.json()
@@ -241,6 +241,7 @@ if analyze_btn and resume_file and job_text_input:
                 st.markdown(f"✅ No tasks for {period.replace('_', ' ').title()}")
 else:
     st.info("📌 Please upload a resume and paste a job description to begin.")
+
 
 
 
