@@ -57,6 +57,10 @@ def get_phrase_matcher():
         logging.info("PhraseMatcher initialized successfully")
     return phrase_matcher
 
+def get_embedding_model():
+    """Wrapper for old function name"""
+    return get_embed_model()
+
 # ======================
 # Load skills from CSV
 # ======================
@@ -380,4 +384,5 @@ def read_root():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
 
