@@ -16,11 +16,17 @@ from fastapi.responses import JSONResponse
 import traceback
 from sentence_transformers import util
 from fastapi import HTTPException
+from pydantic import BaseModel
 
 # Global placeholders
 embed_model = None
 nlp = None
 phrase_matcher = None
+
+
+class GapAnalysisRequest(BaseModel):
+    resume_text: str
+    job_text: str
 
 # Lazy load SentenceTransformer
 def get_embed_model():
@@ -390,6 +396,7 @@ def read_root():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
 
 
 
