@@ -15,8 +15,7 @@ import logging
 from fastapi.responses import JSONResponse
 import traceback
 from sentence_transformers import util
-
-import logging
+from fastapi import HTTPException
 
 # Global placeholders
 embed_model = None
@@ -244,26 +243,31 @@ def normalize(text: str) -> str:
 # ======================
 # Skill Extraction
 # ======================
-def extract_skills_from_text(text: str) -> List[str]:
-    if not text:
+def extract_skills_from_text(text: str) -> list:
+    """
+    Extracts skills from the given text using the preloaded spaCy model
+    and PhraseMatcher patterns.
+    """
+    try:
+        if not text or not text.strip():
+            return []
+
+        # Get preloaded NLP and PhraseMatcher
+        nlp_instance = get_nlp()
+        phrase_matcher_instance = get_phrase_matcher()
+
+        # Process text
+        doc = nlp_instance(text)
+        matches = phrase_matcher_instance(doc)
+
+        # Extract and clean skills
+        skills_found = {doc[start:end].text.strip() for match_id, start, end in matches}
+
+        return sorted(skills_found, key=str.lower)
+
+    except Exception as e:
+        logging.error(f"Error extracting skills: {e}")
         return []
-    text = normalize(text)
-    nlp_local = get_nlp()
-    doc = nlp_local(text)
-    phrase_matcher_local = get_phrase_matcher()
-    found = set()
-
-    matches = phrase_matcher_local(doc)
-    for _, start, end in matches:
-        found.add(canonicalize(doc[start:end].text.strip()))
-
-    tokens = {t.text.lower() for t in doc if not t.is_stop}
-    for base in BASE_SKILLS_LOWER:
-        if base in tokens:
-            orig = next((s for s in BASE_SKILLS if s.lower() == base), base)
-            found.add(canonicalize(orig))
-
-    return sorted(found)
 
 def infer_proficiency(text: str, skill: str) -> Dict[str, Any]:
     snippet = text.lower()
@@ -338,44 +342,46 @@ from fastapi.responses import JSONResponse
 import traceback
 
 @app.post("/analyze/gap")
-async def analyze_gap(payload: GapIn):
+async def analyze_gap(payload: GapAnalysisRequest):
     try:
+        # Load models lazily
+        model_instance = get_embed_model()
         nlp_instance = get_nlp()
-        model_instance = get_embedding_model()
+        phrase_matcher_instance = get_phrase_matcher()
 
-        resume_skills = extract_skills_from_text(payload.resume_text, nlp_instance)
-        job_skills = extract_skills_from_text(payload.job_text, nlp_instance)
+        # Extract skills
+        resume_skills = extract_skills_from_text(payload.resume_text)
+        job_skills = extract_skills_from_text(payload.job_text)
 
-        if not job_skills:
-            return {"matched": [], "missing": [], "suggested_plan": {}}
+        # Quick logging for debug
+        logging.info(f"Resume skills found: {resume_skills}")
+        logging.info(f"Job skills found: {job_skills}")
 
-        resume_emb = model_instance.encode(resume_skills, convert_to_tensor=True) if resume_skills else None
-        job_emb = model_instance.encode(job_skills, convert_to_tensor=True)
+        if not resume_skills or not job_skills:
+            raise HTTPException(status_code=400, detail="Could not extract skills from resume or job description.")
 
-        matched, missing = [], []
-        for idx, jskill in enumerate(job_skills):
-            direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
-            best_score = float(np.max(util.cos_sim(job_emb[idx], resume_emb).cpu().numpy())) if resume_emb is not None else 0.0
-            if direct_present or best_score >= 0.65:
-                matched.append({"skill": jskill, "status": "matched", "score": round(best_score, 3)})
-            else:
-                missing.append({"skill": jskill, "status": "missing", "score": round(1 - best_score, 3)})
+        # Find missing skills
+        missing_skills = list(set(job_skills) - set(resume_skills))
 
-        suggested_plan = {"30_days": [], "60_days": [], "90_days": []}
-        for m in sorted(missing, key=lambda x: -x["score"]):
-            if m["score"] >= 0.8:
-                suggested_plan["30_days"].append({"skill": m["skill"]})
-            elif m["score"] >= 0.6:
-                suggested_plan["60_days"].append({"skill": m["skill"]})
-            else:
-                suggested_plan["90_days"].append({"skill": m["skill"]})
+        # Compute similarity score
+        resume_embedding = model_instance.encode(" ".join(resume_skills), convert_to_tensor=True)
+        job_embedding = model_instance.encode(" ".join(job_skills), convert_to_tensor=True)
 
-        return {"matched": matched, "missing": missing, "suggested_plan": suggested_plan}
+        from sentence_transformers.util import cosine_similarity
+        similarity_score = float(cosine_similarity(resume_embedding, job_embedding)[0][0])
 
+        return {
+            "resume_skills": resume_skills,
+            "job_skills": job_skills,
+            "missing_skills": missing_skills,
+            "similarity_score": round(similarity_score, 3),
+        }
+
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
-
+        logging.exception("Error in /analyze/gap")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def read_root():
@@ -384,5 +390,6 @@ def read_root():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
 
 
