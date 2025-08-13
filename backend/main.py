@@ -12,10 +12,15 @@ from pathlib import Path
 import os
 import uvicorn
 import logging
+from sentence_transformers import SentenceTransformer, util
+import spacy
 
-# Globals for lazy-loaded models
-embed_model = None
-nlp = None
+embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+nlp = spacy.load("en_core_web_sm")
+
+def embed_texts(texts):
+    return embed_model.encode(texts, convert_to_tensor=True)
+
 
 def get_embed_model():
     global embed_model
@@ -348,19 +353,28 @@ async def parse_job(payload: ParseJobIn):
 async def analyze_gap(payload: GapIn):
     resume_txt = payload.resume_text
     job_txt = payload.job_text
+
+    # Extract skills
     resume_skills = extract_skills_from_text(resume_txt)
     job_skills = extract_skills_from_text(job_txt)
+
+    # Embed all skills in batches (fast!)
     resume_emb = embed_texts(resume_skills)
+    job_emb = embed_texts(job_skills)
+
+    from sentence_transformers import util
+
     matched = []
     missing = []
-    for jskill in job_skills:
-        j_emb = embed_texts([jskill])
-        best_score = 0.0
-        if len(resume_skills) > 0:
-            from sentence_transformers import util
-            sims = util.cos_sim(j_emb, resume_emb).numpy().flatten()
-            best_score = float(np.max(sims))
+
+    for idx, jskill in enumerate(job_skills):
         direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
+        best_score = 0.0
+
+        if not direct_present and len(resume_skills) > 0:
+            sims = util.cos_sim(job_emb[idx], resume_emb).cpu().numpy().flatten()
+            best_score = float(np.max(sims))
+
         if direct_present or best_score >= 0.65:
             inferred = infer_proficiency(resume_txt, jskill)
             matched.append({
@@ -381,15 +395,31 @@ async def analyze_gap(payload: GapIn):
                 "inferred": {},
                 "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
             })
+
+    # Create suggested learning plan
     suggested_plan = {"30_days": [], "60_days": [], "90_days": []}
     for m in sorted(missing, key=lambda x: -x["score"]):
         if m["score"] >= 0.8:
-            suggested_plan["30_days"].append({"skill": m["skill"], "task": f"Hands-on: Build a small project using {m['skill']} (1-3 days)"})
+            suggested_plan["30_days"].append({
+                "skill": m["skill"],
+                "task": f"Hands-on: Build a small project using {m['skill']} (1-3 days)"
+            })
         elif m["score"] >= 0.6:
-            suggested_plan["60_days"].append({"skill": m["skill"], "task": f"Learn fundamentals of {m['skill']} and create a demo (3-7 days)"})
+            suggested_plan["60_days"].append({
+                "skill": m["skill"],
+                "task": f"Learn fundamentals of {m['skill']} and create a demo (3-7 days)"
+            })
         else:
-            suggested_plan["90_days"].append({"skill": m["skill"], "task": f"Explore intermediate topics in {m['skill']} and add to portfolio (1-2 weeks)"})
-    return {"matched": matched, "missing": missing, "suggested_plan": suggested_plan}
+            suggested_plan["90_days"].append({
+                "skill": m["skill"],
+                "task": f"Explore intermediate topics in {m['skill']} and add to portfolio (1-2 weeks)"
+            })
+
+    return {
+        "matched": matched,
+        "missing": missing,
+        "suggested_plan": suggested_plan
+    }
 
 @app.get("/")
 def read_root():
