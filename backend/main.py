@@ -318,47 +318,63 @@ async def parse_resume(file: UploadFile = File(...)):
 async def parse_job(payload: ParseJobIn):
     return {"job_id": "job_demo", "parsed_skills": extract_skills_from_text(payload.text)}
 
+from fastapi.responses import JSONResponse
+import traceback
+
 @app.post("/analyze/gap", response_model=GapOut)
 async def analyze_gap(payload: GapIn):
-    from sentence_transformers import util
-    resume_skills = extract_skills_from_text(payload.resume_text)
-    job_skills = extract_skills_from_text(payload.job_text)
-    resume_emb = embed_texts(resume_skills)
-    job_emb = embed_texts(job_skills)
+    try:
+        from sentence_transformers import util
+        resume_skills = extract_skills_from_text(payload.resume_text)
+        job_skills = extract_skills_from_text(payload.job_text)
 
-    matched, missing = [], []
-    for idx, jskill in enumerate(job_skills):
-        direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
-        best_score = float(np.max(util.cos_sim(job_emb[idx], resume_emb).cpu().numpy())) if resume_skills else 0.0
-        if direct_present or best_score >= 0.65:
-            matched.append({
-                "skill": jskill,
-                "status": "matched",
-                "score": round(best_score, 3),
-                "reason": "Found in resume or semantically similar",
-                "inferred": infer_proficiency(payload.resume_text, jskill),
-                "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
-            })
-        else:
-            missing.append({
-                "skill": jskill,
-                "status": "missing",
-                "score": round(1 - best_score, 3),
-                "reason": "Not found or low semantic similarity",
-                "inferred": {},
-                "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
-            })
+        if not job_skills:
+            return {"matched": [], "missing": [], "suggested_plan": {}}
 
-    suggested_plan = {"30_days": [], "60_days": [], "90_days": []}
-    for m in sorted(missing, key=lambda x: -x["score"]):
-        if m["score"] >= 0.8:
-            suggested_plan["30_days"].append({"skill": m["skill"], "task": f"Hands-on project in {m['skill']}"})
-        elif m["score"] >= 0.6:
-            suggested_plan["60_days"].append({"skill": m["skill"], "task": f"Learn basics of {m['skill']}"})
-        else:
-            suggested_plan["90_days"].append({"skill": m["skill"], "task": f"Explore intermediate {m['skill']}"})
+        resume_emb = embed_texts(resume_skills)
+        job_emb = embed_texts(job_skills)
 
-    return {"matched": matched, "missing": missing, "suggested_plan": suggested_plan}
+        matched, missing = [], []
+        for idx, jskill in enumerate(job_skills):
+            direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
+            best_score = float(np.max(util.cos_sim(job_emb[idx], resume_emb).cpu().numpy())) if resume_skills else 0.0
+            if direct_present or best_score >= 0.65:
+                matched.append({
+                    "skill": jskill,
+                    "status": "matched",
+                    "score": round(best_score, 3),
+                    "reason": "Found in resume or semantically similar",
+                    "inferred": infer_proficiency(payload.resume_text, jskill),
+                    "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
+                })
+            else:
+                missing.append({
+                    "skill": jskill,
+                    "status": "missing",
+                    "score": round(1 - best_score, 3),
+                    "reason": "Not found or low semantic similarity",
+                    "inferred": {},
+                    "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
+                })
+
+        suggested_plan = {"30_days": [], "60_days": [], "90_days": []}
+        for m in sorted(missing, key=lambda x: -x["score"]):
+            if m["score"] >= 0.8:
+                suggested_plan["30_days"].append({"skill": m["skill"], "task": f"Hands-on project in {m['skill']}"})
+            elif m["score"] >= 0.6:
+                suggested_plan["60_days"].append({"skill": m["skill"], "task": f"Learn basics of {m['skill']}"})
+            else:
+                suggested_plan["90_days"].append({"skill": m["skill"], "task": f"Explore intermediate {m['skill']}"})
+
+        return {"matched": matched, "missing": missing, "suggested_plan": suggested_plan}
+
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "trace": traceback.format_exc()}
+        )
+
 
 @app.get("/")
 def read_root():
