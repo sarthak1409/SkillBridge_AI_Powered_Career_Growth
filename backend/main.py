@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -12,21 +12,17 @@ from pathlib import Path
 import os
 import uvicorn
 import logging
-from sentence_transformers import SentenceTransformer, util
-import spacy
 
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-nlp = spacy.load("en_core_web_sm")
-
-def embed_texts(texts):
-    return embed_model.encode(texts, convert_to_tensor=True)
-
+# Delay heavy imports
+embed_model = None
+nlp = None
+phrase_matcher = None
 
 def get_embed_model():
     global embed_model
     if embed_model is None:
         from sentence_transformers import SentenceTransformer
-        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")  # CPU only
         logging.info("Loaded SentenceTransformer model")
     return embed_model
 
@@ -34,20 +30,24 @@ def get_nlp():
     global nlp
     if nlp is None:
         import spacy
-        nlp = spacy.load("en_core_web_sm")
+        nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])  # lighter
         logging.info("Loaded spaCy model")
     return nlp
 
-app = FastAPI(title="SkillBridge API - Improved Extractor")
+def get_phrase_matcher():
+    global phrase_matcher
+    if phrase_matcher is None:
+        from spacy.matcher import PhraseMatcher
+        nlp_local = get_nlp()
+        phrase_matcher = PhraseMatcher(nlp_local.vocab, attr="LOWER")
+        patterns = [nlp_local.make_doc(s) for s in set(BASE_SKILLS)]
+        phrase_matcher.add("SKILLS", patterns)
+        logging.info("Initialized PhraseMatcher")
+    return phrase_matcher
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# ======================
+# Load skills from CSV
+# ======================
 SKILLS_FILE = Path(__file__).parent / "skills" / "unique_skills_dataset.csv"
 
 def load_skills_from_csv(path: Path):
@@ -65,7 +65,7 @@ def load_skills_from_csv(path: Path):
 BASE_SKILLS, SKILL_CATEGORIES = load_skills_from_csv(SKILLS_FILE)
 BASE_SKILLS_LOWER = [s.lower() for s in BASE_SKILLS]
 
-# ... (Keep your SYNONYM_MAP as-is) ...
+# Synonyms (same as before, unchanged for brevity)
 SYNONYM_MAP = {
     'oracle db': 'Oracle DB',
     'flink': 'Flink',
@@ -186,57 +186,35 @@ def canonicalize(skill: str) -> str:
     s = skill.lower().strip()
     return SYNONYM_MAP.get(s, skill.strip().title())
 
-# phrase_matcher needs nlp loaded, so create lazily
-phrase_matcher = None
-def get_phrase_matcher():
-    global phrase_matcher
-    if phrase_matcher is None:
-        nlp_local = get_nlp()
-        from spacy.matcher import PhraseMatcher
-        phrase_matcher = PhraseMatcher(nlp_local.vocab, attr="LOWER")
-        patterns = [nlp_local.make_doc(s) for s in set(BASE_SKILLS)]
-        phrase_matcher.add("SKILLS", patterns)
-        logging.info("Initialized PhraseMatcher")
-    return phrase_matcher
-
+# ======================
+# Text Extraction
+# ======================
 def extract_text_from_pdf_bytes(b: bytes) -> str:
     try:
         with pdfplumber.open(io.BytesIO(b)) as pdf:
-            pages = [p.extract_text() or "" for p in pdf.pages]
-        return "\n".join(pages)
+            return "\n".join([p.extract_text() or "" for p in pdf.pages])
     except Exception:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(b))
-        texts = []
-        for p in reader.pages:
-            try:
-                texts.append(p.extract_text() or "")
-            except Exception:
-                continue
-        return "\n".join(texts)
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(b))
+        return "\n".join([p.extract_text() or "" for p in reader.pages if p.extract_text()])
 
 def extract_text_from_docx_bytes(b: bytes) -> str:
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tf:
+        tf.write(b)
+        tmpname = tf.name
     try:
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tf:
-            tf.write(b)
-            tmpname = tf.name
-        text = docx2txt.process(tmpname) or ""
+        return docx2txt.process(tmpname) or ""
+    finally:
         os.unlink(tmpname)
-        return text
-    except Exception:
-        return ""
 
 def extract_text_from_upload(file: UploadFile) -> str:
-    content = b""
-    try:
-        content = file.file.read()
-    finally:
-        file.file.seek(0)
+    content = file.file.read()
+    file.file.seek(0)
     fname = file.filename.lower()
     if fname.endswith(".pdf"):
         return extract_text_from_pdf_bytes(content)
-    elif fname.endswith(".docx") or fname.endswith(".doc"):
+    elif fname.endswith((".docx", ".doc")):
         return extract_text_from_docx_bytes(content)
     else:
         try:
@@ -247,6 +225,9 @@ def extract_text_from_upload(file: UploadFile) -> str:
 def normalize(text: str) -> str:
     return re.sub(r"[^\w\s\-/+\.]", " ", text.lower()).strip()
 
+# ======================
+# Skill Extraction
+# ======================
 def extract_skills_from_text(text: str) -> List[str]:
     if not text:
         return []
@@ -255,26 +236,17 @@ def extract_skills_from_text(text: str) -> List[str]:
     doc = nlp_local(text)
     phrase_matcher_local = get_phrase_matcher()
     found = set()
+
     matches = phrase_matcher_local(doc)
     for _, start, end in matches:
-        span = doc[start:end].text.strip()
-        found.add(canonicalize(span))
-    for ent in doc.ents:
-        ent_text = ent.text.strip()
-        if ent.label_ in ("ORG", "PRODUCT", "WORK_OF_ART", "NORP"):
-            if len(ent_text) <= 40 and re.search(r"[A-Za-z]", ent_text):
-                if ent_text.lower() in BASE_SKILLS_LOWER:
-                    found.add(canonicalize(ent_text))
-    tokens = set([t.text.lower() for t in doc if not t.is_stop])
+        found.add(canonicalize(doc[start:end].text.strip()))
+
+    tokens = {t.text.lower() for t in doc if not t.is_stop}
     for base in BASE_SKILLS_LOWER:
         if base in tokens:
             orig = next((s for s in BASE_SKILLS if s.lower() == base), base)
             found.add(canonicalize(orig))
-    tech_pattern = re.compile(r"\b(" + "|".join([re.escape(s) for s in BASE_SKILLS_LOWER]) + r")\b", re.IGNORECASE)
-    for m in tech_pattern.finditer(text):
-        matched = m.group(0)
-        orig = next((s for s in BASE_SKILLS if s.lower() == matched.lower()), matched)
-        found.add(canonicalize(orig))
+
     return sorted(found)
 
 def infer_proficiency(text: str, skill: str) -> Dict[str, Any]:
@@ -285,39 +257,37 @@ def infer_proficiency(text: str, skill: str) -> Dict[str, Any]:
     if m:
         for group in m.groups():
             if group and re.match(r"^\d+(\.\d+)?$", str(group)):
-                try:
-                    years = float(group)
-                    break
-                except:
-                    pass
-    adv_words = ["expert", "lead", "senior", "extensive experience", "strong experience", "3+ years", "more than"]
-    beg_words = ["familiar with", "basic", "worked on", "introductory", "intern"]
-    level = "unknown"
-    for w in adv_words:
-        if w in snippet and skill.lower() in snippet:
-            level = "advanced"
-            break
-    if level == "unknown":
-        for w in beg_words:
-            if w in snippet and skill.lower() in snippet:
-                level = "beginner"
+                years = float(group)
                 break
-    if level == "unknown" and years:
-        level = "advanced" if years >= 3 else ("intermediate" if years >= 1 else "beginner")
+    level = "unknown"
+    if years is not None:
+        level = "advanced" if years >= 3 else "intermediate" if years >= 1 else "beginner"
     return {"skill": skill, "years": years, "level": level}
 
 def embed_texts(texts: List[str]) -> np.ndarray:
-    embed_model_local = get_embed_model()
+    model = get_embed_model()
     if not texts:
-        return np.zeros((0, embed_model_local.get_sentence_embedding_dimension()))
-    return embed_model_local.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+        return np.zeros((0, model.get_sentence_embedding_dimension()))
+    return model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
 
-# Your Pydantic models as is
+# ======================
+# FastAPI App
+# ======================
+app = FastAPI(title="SkillBridge API - Optimized")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class ParseJobIn(BaseModel):
     text: str
 
 class ParseJobOut(BaseModel):
-    job_id: str = "job_demo"
+    job_id: str
     parsed_skills: List[str]
 
 class GapIn(BaseModel):
@@ -329,8 +299,8 @@ class SkillGapItem(BaseModel):
     status: str
     score: float
     reason: str
-    inferred: Dict[str, Any] = {}
-    category: str = "Other"
+    inferred: Dict[str, Any]
+    category: str
 
 class GapOut(BaseModel):
     matched: List[SkillGapItem]
@@ -346,87 +316,54 @@ async def parse_resume(file: UploadFile = File(...)):
 
 @app.post("/parse/job", response_model=ParseJobOut)
 async def parse_job(payload: ParseJobIn):
-    skills = extract_skills_from_text(payload.text)
-    return {"job_id": "job_demo", "parsed_skills": skills}
+    return {"job_id": "job_demo", "parsed_skills": extract_skills_from_text(payload.text)}
 
 @app.post("/analyze/gap", response_model=GapOut)
 async def analyze_gap(payload: GapIn):
-    resume_txt = payload.resume_text
-    job_txt = payload.job_text
-
-    # Extract skills
-    resume_skills = extract_skills_from_text(resume_txt)
-    job_skills = extract_skills_from_text(job_txt)
-
-    # Embed all skills in batches (fast!)
+    from sentence_transformers import util
+    resume_skills = extract_skills_from_text(payload.resume_text)
+    job_skills = extract_skills_from_text(payload.job_text)
     resume_emb = embed_texts(resume_skills)
     job_emb = embed_texts(job_skills)
 
-    from sentence_transformers import util
-
-    matched = []
-    missing = []
-
+    matched, missing = [], []
     for idx, jskill in enumerate(job_skills):
         direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
-        best_score = 0.0
-
-        if not direct_present and len(resume_skills) > 0:
-            sims = util.cos_sim(job_emb[idx], resume_emb).cpu().numpy().flatten()
-            best_score = float(np.max(sims))
-
+        best_score = float(np.max(util.cos_sim(job_emb[idx], resume_emb).cpu().numpy())) if resume_skills else 0.0
         if direct_present or best_score >= 0.65:
-            inferred = infer_proficiency(resume_txt, jskill)
             matched.append({
                 "skill": jskill,
                 "status": "matched",
                 "score": round(best_score, 3),
                 "reason": "Found in resume or semantically similar",
-                "inferred": inferred,
+                "inferred": infer_proficiency(payload.resume_text, jskill),
                 "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
             })
         else:
-            severity = round(1 - best_score, 3)
             missing.append({
                 "skill": jskill,
                 "status": "missing",
-                "score": severity,
+                "score": round(1 - best_score, 3),
                 "reason": "Not found or low semantic similarity",
                 "inferred": {},
                 "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
             })
 
-    # Create suggested learning plan
     suggested_plan = {"30_days": [], "60_days": [], "90_days": []}
     for m in sorted(missing, key=lambda x: -x["score"]):
         if m["score"] >= 0.8:
-            suggested_plan["30_days"].append({
-                "skill": m["skill"],
-                "task": f"Hands-on: Build a small project using {m['skill']} (1-3 days)"
-            })
+            suggested_plan["30_days"].append({"skill": m["skill"], "task": f"Hands-on project in {m['skill']}"})
         elif m["score"] >= 0.6:
-            suggested_plan["60_days"].append({
-                "skill": m["skill"],
-                "task": f"Learn fundamentals of {m['skill']} and create a demo (3-7 days)"
-            })
+            suggested_plan["60_days"].append({"skill": m["skill"], "task": f"Learn basics of {m['skill']}"})
         else:
-            suggested_plan["90_days"].append({
-                "skill": m["skill"],
-                "task": f"Explore intermediate topics in {m['skill']} and add to portfolio (1-2 weeks)"
-            })
+            suggested_plan["90_days"].append({"skill": m["skill"], "task": f"Explore intermediate {m['skill']}"})
 
-    return {
-        "matched": matched,
-        "missing": missing,
-        "suggested_plan": suggested_plan
-    }
+    return {"matched": matched, "missing": missing, "suggested_plan": suggested_plan}
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "service": "skillbridge_improved"}
+    return {"status": "ok", "service": "skillbridge_optimized"}
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    port = int(os.environ.get("PORT", 8000))
-    logging.info(f"Starting app on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
