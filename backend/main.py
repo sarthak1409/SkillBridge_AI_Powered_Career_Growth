@@ -12,37 +12,49 @@ from pathlib import Path
 import os
 import uvicorn
 import logging
+from fastapi.responses import JSONResponse
+import traceback
+from sentence_transformers import util
 
-# Delay heavy imports
+import logging
+
+# Global placeholders
 embed_model = None
 nlp = None
 phrase_matcher = None
 
+# Lazy load SentenceTransformer
 def get_embed_model():
     global embed_model
     if embed_model is None:
         from sentence_transformers import SentenceTransformer
-        embed_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")  # CPU only
-        logging.info("Loaded SentenceTransformer model")
+        logging.info("Loading SentenceTransformer model...")
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")  # CPU only for Render
+        logging.info("SentenceTransformer loaded successfully")
     return embed_model
 
+# Lazy load spaCy
 def get_nlp():
     global nlp
     if nlp is None:
         import spacy
-        nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])  # lighter
-        logging.info("Loaded spaCy model")
+        logging.info("Loading spaCy model...")
+        nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])  # Lighter load
+        logging.info("spaCy model loaded successfully")
     return nlp
 
+# Lazy load PhraseMatcher
 def get_phrase_matcher():
     global phrase_matcher
     if phrase_matcher is None:
         from spacy.matcher import PhraseMatcher
+        logging.info("Initializing PhraseMatcher...")
         nlp_local = get_nlp()
         phrase_matcher = PhraseMatcher(nlp_local.vocab, attr="LOWER")
-        patterns = [nlp_local.make_doc(s) for s in set(BASE_SKILLS)]
+        # BASE_SKILLS must be defined before this call
+        patterns = [nlp_local.make_doc(skill) for skill in set(BASE_SKILLS)]
         phrase_matcher.add("SKILLS", patterns)
-        logging.info("Initialized PhraseMatcher")
+        logging.info("PhraseMatcher initialized successfully")
     return phrase_matcher
 
 # ======================
@@ -321,59 +333,44 @@ async def parse_job(payload: ParseJobIn):
 from fastapi.responses import JSONResponse
 import traceback
 
-@app.post("/analyze/gap", response_model=GapOut)
+@app.post("/analyze/gap")
 async def analyze_gap(payload: GapIn):
     try:
-        from sentence_transformers import util
-        resume_skills = extract_skills_from_text(payload.resume_text)
-        job_skills = extract_skills_from_text(payload.job_text)
+        nlp_instance = get_nlp()
+        model_instance = get_embedding_model()
+
+        resume_skills = extract_skills_from_text(payload.resume_text, nlp_instance)
+        job_skills = extract_skills_from_text(payload.job_text, nlp_instance)
 
         if not job_skills:
             return {"matched": [], "missing": [], "suggested_plan": {}}
 
-        resume_emb = embed_texts(resume_skills)
-        job_emb = embed_texts(job_skills)
+        resume_emb = model_instance.encode(resume_skills, convert_to_tensor=True) if resume_skills else None
+        job_emb = model_instance.encode(job_skills, convert_to_tensor=True)
 
         matched, missing = [], []
         for idx, jskill in enumerate(job_skills):
             direct_present = any(jskill.lower() == rs.lower() for rs in resume_skills)
-            best_score = float(np.max(util.cos_sim(job_emb[idx], resume_emb).cpu().numpy())) if resume_skills else 0.0
+            best_score = float(np.max(util.cos_sim(job_emb[idx], resume_emb).cpu().numpy())) if resume_emb is not None else 0.0
             if direct_present or best_score >= 0.65:
-                matched.append({
-                    "skill": jskill,
-                    "status": "matched",
-                    "score": round(best_score, 3),
-                    "reason": "Found in resume or semantically similar",
-                    "inferred": infer_proficiency(payload.resume_text, jskill),
-                    "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
-                })
+                matched.append({"skill": jskill, "status": "matched", "score": round(best_score, 3)})
             else:
-                missing.append({
-                    "skill": jskill,
-                    "status": "missing",
-                    "score": round(1 - best_score, 3),
-                    "reason": "Not found or low semantic similarity",
-                    "inferred": {},
-                    "category": SKILL_CATEGORIES.get(jskill.lower(), "Other")
-                })
+                missing.append({"skill": jskill, "status": "missing", "score": round(1 - best_score, 3)})
 
         suggested_plan = {"30_days": [], "60_days": [], "90_days": []}
         for m in sorted(missing, key=lambda x: -x["score"]):
             if m["score"] >= 0.8:
-                suggested_plan["30_days"].append({"skill": m["skill"], "task": f"Hands-on project in {m['skill']}"})
+                suggested_plan["30_days"].append({"skill": m["skill"]})
             elif m["score"] >= 0.6:
-                suggested_plan["60_days"].append({"skill": m["skill"], "task": f"Learn basics of {m['skill']}"})
+                suggested_plan["60_days"].append({"skill": m["skill"]})
             else:
-                suggested_plan["90_days"].append({"skill": m["skill"], "task": f"Explore intermediate {m['skill']}"})
+                suggested_plan["90_days"].append({"skill": m["skill"]})
 
         return {"matched": matched, "missing": missing, "suggested_plan": suggested_plan}
 
     except Exception as e:
         traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "trace": traceback.format_exc()}
-        )
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
 
 @app.get("/")
@@ -383,3 +380,4 @@ def read_root():
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
