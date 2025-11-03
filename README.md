@@ -11,7 +11,7 @@ The system is composed of:
 
 ---
 ## 🎥 Demo Video  
-Watch the full demo here 👉 [SkillBridge Project Demo](https://youtu.be/https://youtu.be/SFxe-UysZ9U)
+Watch the full demo here 👉 [SkillBridge Project Demo](https://youtu.be/SFxe-UysZ9U)
 
 
 
@@ -134,6 +134,7 @@ Frontend will start at: [http://localhost:8501](http://localhost:8501)
    - ✅ Skills found in resume  
    - ⚠ Missing / weak skills with severity  
    - 📅 Recommended learning plan  
+
 
 
 
