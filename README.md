@@ -10,8 +10,10 @@ The system is composed of:
 - **Frontend (Streamlit)** – Interactive UI for users to upload resumes, paste job descriptions, and view results
 
 ---
-## 🎥 Demo Video  
-Watch the full demo here 👉 [SkillBridge Project Demo](https://youtu.be/SFxe-UysZ9U)
+## 🎬 Watch the Demo
+
+[![SkillBridge Demo](https://img.youtube.com/vi/SFxe-UysZ9U/0.jpg)](https://youtu.be/SFxe-UysZ9U)
+
 
 
 
@@ -134,6 +136,7 @@ Frontend will start at: [http://localhost:8501](http://localhost:8501)
    - ✅ Skills found in resume  
    - ⚠ Missing / weak skills with severity  
    - 📅 Recommended learning plan  
+
 
 
 
